@@ -17,6 +17,7 @@ from .detect import Detector
 from .sim import EpidemicConfig, run_epidemic
 from .stats import mean, sd
 from .trials import run_trials
+from .who import WhoView, make_who
 from .world import build_world
 
 RUNS = Path(os.environ.get("CHONKVID_RUNS_DIR") or ROOT / "runs")
@@ -38,12 +39,12 @@ class Recorder:
 
 
 async def epidemic(llm, detector, cfg: EpidemicConfig, s: Settings, record: bool = True,
-                   world=None) -> tuple[dict, list[dict]]:
+                   world=None, who=None) -> tuple[dict, list[dict]]:
     rec = Recorder(f"{llm.source}-{cfg.label or cfg.policy}-s{cfg.seed}") if record else None
     events: list[dict] = []
     summary: dict = {}
     async for ev in run_epidemic(llm, detector, cfg, world=world, who_model=s.who_model,
-                                 agent_model=s.agent_model):
+                                 agent_model=s.agent_model, who=who):
         events.append(ev)
         if rec:
             rec.write(ev)
@@ -55,15 +56,29 @@ async def epidemic(llm, detector, cfg: EpidemicConfig, s: Settings, record: bool
     return summary, events
 
 
-async def synthesise_vaccine(llm, s: Settings, infected: list[str], resisted: list[str]) -> str:
+async def synthesise_vaccine(llm, s: Settings, infected: list[str], resisted: list[str],
+                             who=None) -> tuple[str, dict]:
     def block(xs):
         return "\n".join(f"- {x[:400]}" for x in xs[:6]) or "- (none)"
+    meta: dict = {"mode": "chat"}
+    if who is not None:
+        view = WhoView(tick=0, counts={}, history=[], states={}, messages={},
+                       parents={}, contacts={}, names={}, source=llm.source)
+        try:
+            vaccine = await who.vaccine(view, [x[:400] for x in infected[:6]],
+                                        [x[:400] for x in resisted[:6]])
+            meta = {"mode": "agent", "rationale": vaccine.rationale,
+                    "expected_effect": vaccine.expected_effect,
+                    "tools_used": vaccine.tools_used}
+            return vaccine.patch, meta
+        except Exception as exc:                 # the demo must not depend on this path
+            meta = {"mode": "chat", "agent_error": f"{type(exc).__name__}: {exc}"}
     text = await llm.chat(s.who_model, [
         {"role": "system", "content": scenario.WHO_SYSTEM},
         {"role": "user", "content": scenario.WHO_VACCINE.format(
             infected=block(infected), resisted=block(resisted))},
     ], temperature=0.2, max_tokens=6000)  # Le Chonk reasons ~3k tokens before answering
-    return text.strip().strip('"')
+    return text.strip().strip('"'), meta
 
 
 # A run "breaks out" when patient zero's chain reaches at least 5 other agents.
@@ -86,9 +101,11 @@ async def run_experiment(llm, s: Settings, n_agents: int = 40, seeds: int = 3,
                          trials_n: int = 30, k: int = 8, ticks: int = 12,
                          log=print) -> dict:
     detector = Detector(llm, s.threshold)
+    who = make_who(s, llm)
     t0 = time.time()
     out: dict = {"source": llm.source, "mode": s.mode,
                  "models": {"agent": s.agent_model, "embed": s.embed_model, "who": s.who_model},
+                 "who_mode": s.who_mode,
                  "threshold": s.threshold, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "params": {"n_agents": n_agents, "seeds": seeds, "trials_n": trials_n,
                             "k": k, "ticks": ticks}}
@@ -123,8 +140,9 @@ async def run_experiment(llm, s: Settings, n_agents: int = 40, seeds: int = 3,
                 f"peak I {summary['peak_infectious']}")
 
     log("[WHO] synthesising vaccine from infection samples")
-    vaccine = await synthesise_vaccine(llm, s, infected_msgs, resisted_msgs)
+    vaccine, who_meta = await synthesise_vaccine(llm, s, infected_msgs, resisted_msgs, who=who)
     out["who_vaccine"] = vaccine
+    out["who_vaccine_meta"] = who_meta
     out["trials"]["who_vaccine"] = await run_trials(
         llm, detector, trials_n, vaccine, label="WHO vaccine prompt", agent_model=s.agent_model)
     t = out["trials"]["who_vaccine"]

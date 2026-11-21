@@ -59,6 +59,20 @@ class Settings:
     threshold_live: float = field(default_factory=lambda: _f("EMBED_THRESHOLD", 0.86))
     threshold_mock: float = field(default_factory=lambda: _f("MOCK_EMBED_THRESHOLD", 0.5))
     mock_p_base: float = field(default_factory=lambda: _f("MOCK_P_BASE", 0.55))
+    # WHO agent: "chat" keeps the original single completion, "agent" turns on tools,
+    # structured output, full-context reading and (optionally) the curve image.
+    who_mode: str = field(default_factory=lambda: os.environ.get("WHO_MODE", "chat").strip())
+    who_context: str = field(default_factory=lambda: os.environ.get("WHO_CONTEXT", "full").strip())
+    who_vision: bool = field(
+        default_factory=lambda: os.environ.get("WHO_VISION", "1").strip() not in ("0", "false", "")
+    )
+    who_rounds: int = field(
+        default_factory=lambda: int(os.environ.get("WHO_ROUNDS", "2") or 2)
+    )
+
+    @property
+    def who_agent(self) -> bool:
+        return self.who_mode == "agent"
 
     @property
     def mode(self) -> str:

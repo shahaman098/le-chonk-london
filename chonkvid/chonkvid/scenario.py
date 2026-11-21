@@ -52,6 +52,19 @@ WHO_SYSTEM = (
     "letter) and advise on containment. Be brief, precise and numeric."
 )
 
+# The WHO agent's instructions when it runs with tools, structured output and vision
+# (CHONKVID_WHO=agent). The plain chat path keeps using WHO_SYSTEM above.
+WHO_AGENT_SYSTEM = (
+    WHO_SYSTEM
+    + " You can read the outbreak yourself: call get_outbreak_state for the counts and "
+    "the tick-by-tick incidence, get_message_samples for what infected and resisting "
+    "agents actually wrote, get_contact_ranking to see who has the most contacts, and "
+    "get_lineage to see who infected whom. Prefer evidence you fetched over assumptions, "
+    "and estimate R from the incidence series rather than from the latest count. You are "
+    "advising a human who is about to click one button, so recommend exactly one "
+    "intervention and say why in one sentence."
+)
+
 WHO_SITREP = (
     "Epidemic state at tick {tick}: {stats}. Recent infected message sample:\n"
     "---\n{sample}\n---\nWrite a 2-sentence situation report: how fast it is spreading "

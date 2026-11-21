@@ -49,6 +49,31 @@ def _content_text(content) -> str:
     return "".join(out)
 
 
+# Public name for the same normaliser: `who.py` needs it on raw completion responses.
+content_text = _content_text
+
+
+def _attach_image(messages: list[dict], png: bytes) -> list[dict]:
+    """Return a copy of `messages` with `png` attached to the last user message."""
+    import base64
+
+    out = list(messages)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].get("role") != "user":
+            continue
+        text = out[i].get("content")
+        if isinstance(text, list):
+            break
+        out[i] = dict(out[i])
+        out[i]["content"] = [
+            {"type": "text", "text": str(text or "")},
+            {"type": "image_url",
+             "image_url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")},
+        ]
+        break
+    return out
+
+
 class LiveLLM:
     source = "live"
 
@@ -105,17 +130,39 @@ class LiveLLM:
             raise RuntimeError(f"Mistral {path} {r.status_code}: {r.text[:300]}")
         raise RuntimeError(f"Mistral {path}: retries exhausted")
 
-    async def chat(self, model: str, messages: list[dict], temperature: float = 0.7,
-                   max_tokens: int = 220) -> str:
-        data = await self._post("/chat/completions", {
-            "model": model, "messages": messages,
-            "temperature": temperature, "max_tokens": max_tokens,
-        })
+    async def completion(self, model: str, messages: list[dict], *,
+                         temperature: float = 0.7, max_tokens: int = 220,
+                         tools: list[dict] | None = None,
+                         tool_choice: str | None = None,
+                         response_format: dict | None = None,
+                         image_png: bytes | None = None) -> dict:
+        """Raw /chat/completions response: the caller keeps tool calls and JSON schemas.
+
+        ``image_png`` attaches the image to the last user message as a vision content
+        block, which is how Le Chonk is shown the curve.
+        """
+        payload: dict = {"model": model, "messages": messages,
+                         "temperature": temperature, "max_tokens": max_tokens}
+        if tools:
+            payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+        if response_format:
+            payload["response_format"] = response_format
+        if image_png:
+            payload["messages"] = _attach_image(messages, image_png)
+        data = await self._post("/chat/completions", payload)
         self.usage.chat_calls += 1
         u = data.get("usage") or {}
         self.usage.prompt_tokens += u.get("prompt_tokens", 0)
         self.usage.completion_tokens += u.get("completion_tokens", 0)
-        return _content_text(data["choices"][0]["message"].get("content")).strip()
+        return data
+
+    async def chat(self, model: str, messages: list[dict], temperature: float = 0.7,
+                   max_tokens: int = 220) -> str:
+        data = await self.completion(model, messages, temperature=temperature,
+                                     max_tokens=max_tokens)
+        return content_text(data["choices"][0]["message"].get("content")).strip()
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -180,6 +227,25 @@ def mock_embedding(text: str, dim: int = 512) -> list[float]:
     return [x / n for x in v]
 
 
+def _mock_sitrep(state: dict) -> dict:
+    """A schema-shaped report derived from the tool result, so mock mode looks coherent."""
+    counts = state.get("counts") or {}
+    incidence = state.get("incidence") or []
+    series = [int(h.get("counts", {}).get("I", 0)) for h in incidence]
+    now = series[-1] if series else int(counts.get("I", 0))
+    prev = series[-2] if len(series) > 1 else max(now - 1, 0)
+    trend = "growing" if now > prev else ("shrinking" if now < prev else "stable")
+    return {
+        "headline": f"(mock) {now} agents infectious, spread {trend}",
+        "rt": round(now / prev, 2) if prev else (2.0 if now else 0.0),
+        "trend": trend,
+        "recommendation": "harden_targeted" if now else "none",
+        "rationale": "(mock) infectivity falls with defensive wording; hardening the "
+                     "highest-contact agents removes the most transmission routes.",
+        "confidence": "low" if len(series) < 3 else "medium",
+    }
+
+
 class MockLLM:
     """Deterministic stand-in. Infectivity falls with defensive wording in the system
     prompt. Results from this model are NOT measurements of any Mistral model."""
@@ -236,6 +302,55 @@ class MockLLM:
             f"{'accelerating' if i > 3 else 'still limited'}. Harden the highest-contact "
             "agents first, starting with group-chat members."
         )
+
+    # ---- agent path (tools + structured output + vision), used by who.WhoAgent
+
+    async def completion(self, model: str, messages: list[dict], *,
+                         temperature: float = 0.7, max_tokens: int = 220,
+                         tools: list[dict] | None = None,
+                         tool_choice: str | None = None,
+                         response_format: dict | None = None,
+                         image_png: bytes | None = None) -> dict:
+        """Deterministic stand-in for the agent calls: one tool round, then a schema-
+        shaped answer derived from whatever the tool returned."""
+        self.usage.chat_calls += 1
+        await asyncio.sleep(0)
+        if tools:
+            if not any(m.get("role") == "tool" for m in messages):
+                name = tools[0]["function"]["name"]
+                return {"choices": [{"message": {
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{"id": "call_mock_1", "type": "function",
+                                    "function": {"name": name, "arguments": {}}}],
+                }}]}
+            return {"choices": [{"message": {"role": "assistant",
+                                             "content": "(mock) read the log."}}]}
+        name = ((response_format or {}).get("json_schema") or {}).get("name")
+        state = self._mock_state(messages)
+        if name == "situation_report":
+            body = _mock_sitrep(state)
+        elif name == "vaccine_patch":
+            body = {
+                "patch": scenario.HARDENED_PROMPT,
+                "rationale": "(mock) the payload spreads because agents treat message "
+                             "text as instructions; naming that is enough to stop it.",
+                "expected_effect": "large",
+            }
+        else:
+            body = {"note": "(mock) no structured output requested"}
+        return {"choices": [{"message": {"role": "assistant",
+                                         "content": json.dumps(body)}}]}
+
+    @staticmethod
+    def _mock_state(messages: list[dict]) -> dict:
+        for m in reversed(messages):
+            if m.get("role") != "tool":
+                continue
+            try:
+                return json.loads(m.get("content") or "{}")
+            except json.JSONDecodeError:
+                continue
+        return {}
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         self.usage.embed_calls += 1

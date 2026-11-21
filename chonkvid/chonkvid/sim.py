@@ -14,6 +14,7 @@ import networkx as nx
 
 from . import scenario
 from .detect import Detector
+from .who import WhoView
 from .world import Agent, World, build_world
 
 
@@ -94,7 +95,10 @@ def counts(st: _State) -> dict[str, int]:
 
 async def run_epidemic(llm, detector: Detector, cfg: EpidemicConfig,
                        world: World | None = None, who_model: str = "",
-                       agent_model: str = "") -> AsyncIterator[dict]:
+                       agent_model: str = "", who=None) -> AsyncIterator[dict]:
+    """`who` is an optional who.WhoAgent. When it is present the WHO runs with tools,
+    structured output and vision; when it is absent (or it raises) the original single
+    chat-completion path is used, so a demo cannot be broken by the agent path."""
     world = world or build_world(cfg.n, cfg.seed)
     rng = random.Random(cfg.seed * 31337 + 11)
     p0 = pick_patient_zero(world, cfg)
@@ -113,6 +117,7 @@ async def run_epidemic(llm, detector: Detector, cfg: EpidemicConfig,
     yield {"type": "infection", "tick": 0, "agent": p0, "parent": None,
            "message": seed_msg, "verdict": {"infected": True, "canary": True, "score": 1.0}}
     yield {"type": "tick", "tick": 0, "counts": counts(st), "states": dict(st.state)}
+    history: list[dict] = [{"tick": 0, "counts": counts(st)}]
 
     names = {a.id: a.name for a in world.agents}
     peak = (1, 0)
@@ -177,18 +182,33 @@ async def run_epidemic(llm, detector: Detector, cfg: EpidemicConfig,
         c_now = counts(st)
         if c_now["I"] > peak[0]:
             peak = (c_now["I"], tick)
+        history.append({"tick": tick, "counts": c_now})
         yield {"type": "tick", "tick": tick, "phase": "resolved", "counts": c_now,
                "states": dict(st.state)}
         if cfg.who_every and tick % cfg.who_every == 0 and who_model:
             c = counts(st)
             cur = [a for a, s in st.state.items() if s == "I"]
             sample = st.message[cur[-1]] if cur else seed_msg
+            if who is not None:
+                view = WhoView(tick=tick, counts=c, history=list(history),
+                               states=dict(st.state), messages=dict(st.message),
+                               parents=dict(st.parent), contacts=dict(st.contacts),
+                               names=names, vaccinated=vaccinated, patient_zero=p0,
+                               agent_model=agent_model, source=llm.source)
+                try:
+                    report = await who.sitrep(view)
+                    yield {"type": "sitrep", "tick": tick, "text": report.text,
+                           "structured": report.as_dict(), "mode": "agent"}
+                    continue
+                except Exception as exc:                  # fall back, never fail the run
+                    yield {"type": "sitrep_error", "tick": tick,
+                           "error": f"{type(exc).__name__}: {exc}"}
             text = await llm.chat(who_model, [
                 {"role": "system", "content": scenario.WHO_SYSTEM},
                 {"role": "user", "content": scenario.WHO_SITREP.format(
                     tick=tick, stats=" ".join(f"{k}={v}" for k, v in c.items()), sample=sample)},
             ], temperature=0.3, max_tokens=6000)  # Le Chonk reasons ~3k tokens before answering
-            yield {"type": "sitrep", "tick": tick, "text": text}
+            yield {"type": "sitrep", "tick": tick, "text": text, "mode": "chat"}
 
     ever = [a for a in st.infected_at]
     finished = [a for a, s in st.state.items() if s == "R"]

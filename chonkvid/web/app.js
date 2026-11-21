@@ -178,7 +178,19 @@ function handle(ev) {
     case "resisted":
       addMsg("ticker", "resisted", `t${ev.tick} · ${names[ev.agent]} resisted${ev.vaccinated ? " (hardened)" : ""} · score ${f2(ev.verdict.score)}`, ev.message, ev.agent);
       break;
-    case "sitrep": addMsg("who-feed", "sitrep", `WHO · tick ${ev.tick}`, ev.text); break;
+    case "sitrep": {
+      const st = ev.structured;
+      if (st) {
+        // Structured output from the schema: typed fields, no regex over prose.
+        const tools = (st.tools_used || []).length ? ` · ${st.tools_used.length} tool calls (${[...new Set(st.tools_used)].join(", ")})` : "";
+        const img = st.image_sent ? " · read the curve image" : "";
+        addMsg("who-feed", "sitrep", `WHO · tick ${ev.tick} · R ${st.rt.toFixed(2)} ${st.trend} · ${st.confidence} confidence`,
+               `${st.headline}\n${st.rationale}\n→ ${st.recommendation}${tools}${img} · ${st.context_tokens_est} tokens of log`);
+      } else {
+        addMsg("who-feed", "sitrep", `WHO · tick ${ev.tick}`, ev.text);
+      }
+      break;
+    }
     case "end": {
       const s = ev.summary;
       addMsg("who-feed", "sitrep", `Run complete (${ev.source})`, `Attack rate ${pct(s.attack_rate)} · peak ${s.peak_infectious} infected at tick ${s.peak_tick} · ${s.vaccinated_infected}/${s.k} hardened agents infected · ${ev.usage.chat_calls} model calls`);

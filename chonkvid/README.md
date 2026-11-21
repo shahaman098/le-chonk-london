@@ -74,6 +74,32 @@ lands in the diff panel as a merge-ready patch against your own text.
 In mock mode these numbers come from the scripted stand-in model and are labelled
 MOCK; add `MISTRAL_API_KEY` to `.env` for real measurements.
 
+## The WHO agent: tools, structured output, 1M context, vision
+
+The default WHO path is one chat completion with a situation report pasted in. Set
+`WHO_MODE=agent` and the same role runs as an agent that reads the outbreak itself:
+
+| Capability | What it does here | Where in the code |
+|---|---|---|
+| Function calling | Le Chonk picks from four tools: `get_outbreak_state`, `get_message_samples`, `get_contact_ranking`, `get_lineage`. The harness executes them against the live simulation and feeds the results back, up to `WHO_ROUNDS` rounds. | `chonkvid/who.py` |
+| Structured outputs | The situation report is a JSON schema (`headline`, `rt`, `trend`, `recommendation`, `rationale`, `confidence`), enforced by `response_format: json_schema`. The vaccine is a second schema (`patch`, `rationale`, `expected_effect`). The dashboard renders typed fields instead of regexing prose. | `SITREP_SCHEMA`, `VACCINE_SCHEMA` |
+| 1M context | With `WHO_CONTEXT=full` it is handed every message of the outbreak in one request, not one sampled message. The event reports `context_tokens_est`, so the claim is measured, not asserted. At fleet scale this is the only way the whole log fits. | `WhoAgent._context_block` |
+| Vision | Each report also sends a rendered PNG of the S/E/I/R curves, so it reasons about the shape of the epidemic and not just the latest counts. | `chonkvid/curve.py`, `_attach_image` |
+
+```bash
+WHO_MODE=agent .venv/bin/python -m chonkvid serve    # or put it in .env
+```
+
+- `WHO_MODE=chat` (default) keeps the original single-call path: nothing changes.
+- Any failure in the agent path emits a `sitrep_error` event and falls back to the
+  chat completion, so a live demo cannot be broken by it.
+- Mock mode exercises the whole path with a scripted stand-in, so the dashboard works
+  with no key. Those numbers are labelled MOCK.
+- `scripts/smoke_who_agent.py` starts the real server and prints the sitreps it emits.
+
+Tools, schemas and the image are all logged in every run recording, so the judge can
+audit what the agent actually did.
+
 ## Results (live, 21 Nov)
 
 _Paste `results/latest.md` from the live `experiment` run here before submitting._
@@ -82,7 +108,9 @@ _Paste `results/latest.md` from the live `experiment` run here before submitting
 
 - **Ministral**: the agent population.
 - **mistral-embed**: infection detection and variant lineages.
-- **Le Chonk / Mistral Large**: the WHO agent (situation reports, vaccine synthesis).
+- **Le Chonk / Mistral Large 4**: the WHO agent (situation reports, vaccine synthesis),
+  using function calling, JSON-schema structured outputs, its 1M-token context window
+  and its vision encoder (see the WHO agent section above).
 - **Mistral Vibe**: build tool.
 
 Model IDs are set in `.env`.

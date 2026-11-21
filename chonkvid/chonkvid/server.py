@@ -17,6 +17,7 @@ from .detect import Detector
 from .experiment import RESULTS, RUNS, Recorder
 from .llm import make_llm
 from .sim import EpidemicConfig, run_epidemic
+from .who import make_who
 from .world import build_world
 
 WEB = ROOT / "web"
@@ -34,6 +35,7 @@ def status():
     s = settings()
     return {"mode": s.mode, "key": bool(s.api_key), "threshold": s.threshold,
             "models": {"agent": s.agent_model, "embed": s.embed_model, "who": s.who_model},
+            "who_mode": s.who_mode, "who_context": s.who_context, "who_vision": s.who_vision,
             "payload": scenario.PAYLOAD, "hardened": scenario.HARDENED_PROMPT,
             "sample_system": scenario.SAMPLE_SYSTEM}
 
@@ -121,10 +123,11 @@ async def ws_run(ws: WebSocket):
         pace = float(data.get("pace", 0.5 if s.mode == "mock" else 0.0))
         llm = make_llm(s, seed=cfg.seed)
         det = Detector(llm, s.threshold)
+        who = make_who(s, llm)
         rec = Recorder(f"{llm.source}-dash-{cfg.policy}-s{cfg.seed}")
         try:
             async for ev in run_epidemic(llm, det, cfg, who_model=s.who_model,
-                                         agent_model=s.agent_model):
+                                         agent_model=s.agent_model, who=who):
                 rec.write(ev)
                 await ws.send_json(ev)
                 if ev["type"] == "tick" and ev.get("phase") == "resolved" and pace:

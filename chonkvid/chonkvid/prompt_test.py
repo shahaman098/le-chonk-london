@@ -17,6 +17,7 @@ from .config import Settings
 from .detect import Detector
 from .experiment import RESULTS, synthesise_vaccine
 from .trials import run_trials
+from .who import make_who
 
 
 def _trim(t: dict) -> dict:
@@ -49,8 +50,11 @@ async def test_prompt(llm, s: Settings, system: str, n: int = 20,
             # Nothing for the WHO to learn from: no sample of the pathogen's spread.
             vaccine, source_name = scenario.HARDENED_PROMPT, "fallback: hardened template"
         else:
-            vaccine = await synthesise_vaccine(llm, s, infected, resisted)
-            source_name = "WHO (" + s.who_model + ")"
+            vaccine, meta = await synthesise_vaccine(llm, s, infected, resisted,
+                                                     who=make_who(s, llm))
+            out["vaccine_meta"] = meta
+            source_name = ("WHO agent (" + s.who_model + ")"
+                           if meta.get("mode") == "agent" else "WHO (" + s.who_model + ")")
         vaccinated = await run_trials(llm, detector, n, vaccine, system=system,
                                       label="vaccinated", agent_model=s.agent_model)
         out["vaccinated"] = _trim(vaccinated)
