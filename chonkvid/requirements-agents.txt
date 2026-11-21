@@ -1,0 +1,3 @@
+# Optional: only needed for WHO_MODE=managed (the Mistral Managed Agents route).
+# The chat-completions routes (WHO_MODE=chat / agent) need nothing from this file.
+mistralai-agents==1.1.0

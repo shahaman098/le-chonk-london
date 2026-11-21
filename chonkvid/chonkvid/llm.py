@@ -25,6 +25,7 @@ class Usage:
     def __init__(self) -> None:
         self.chat_calls = 0
         self.embed_calls = 0
+        self.voice_calls = 0
         self.prompt_tokens = 0
         self.completion_tokens = 0
 
@@ -170,6 +171,35 @@ class LiveLLM:
         data = await self._post("/embeddings", {"model": self.s.embed_model, "input": texts})
         self.usage.embed_calls += 1
         return [d["embedding"] for d in sorted(data["data"], key=lambda d: d["index"])]
+
+    async def speech(self, text: str, voice_id: str | None = None,
+                     model: str | None = None) -> tuple[bytes, str]:
+        """Voxtral TTS. Returns (audio bytes, format). The endpoint base64s the audio."""
+        import base64
+
+        data = await self._post("/audio/speech", {
+            "model": model or self.s.tts_model,
+            "input": text,
+            "voice_id": voice_id or "en_paul_neutral",
+            "response_format": "mp3",
+        })
+        self.usage.voice_calls += 1
+        return base64.b64decode(data.get("audio_data") or ""), "mp3"
+
+    async def transcribe(self, audio: bytes, filename: str = "question.webm",
+                         model: str | None = None) -> str:
+        """Voxtral speech-to-text over multipart, the shape the transcriptions endpoint wants."""
+        async with self._sem:
+            await self._pace()
+            r = await self._http().post(
+                "/audio/transcriptions",
+                data={"model": model or self.s.stt_model},
+                files={"file": (filename, audio, "audio/webm")},
+            )
+        if r.status_code != 200:
+            raise RuntimeError(f"Mistral /audio/transcriptions {r.status_code}: {r.text[:200]}")
+        self.usage.voice_calls += 1
+        return str(r.json().get("text", ""))
 
     async def list_models(self) -> list[str]:
         r = await self._http().get("/models")
@@ -357,7 +387,23 @@ class MockLLM:
         return [mock_embedding(t) for t in texts]
 
     async def list_models(self) -> list[str]:
-        return [self.s.agent_model, self.s.embed_model, self.s.who_model]
+        return [self.s.agent_model, self.s.embed_model, self.s.who_model,
+                self.s.tts_model, self.s.stt_model]
+
+    async def speech(self, text: str, voice_id: str | None = None,
+                     model: str | None = None) -> tuple[bytes, str]:
+        """Mock audio: a short generated tone, so the voice path is testable for free."""
+        from .voice import tone
+
+        self.usage.voice_calls += 1
+        await asyncio.sleep(0)
+        return tone(), "wav"
+
+    async def transcribe(self, audio: bytes, filename: str = "question.webm",
+                         model: str | None = None) -> str:
+        self.usage.voice_calls += 1
+        await asyncio.sleep(0)
+        return "(mock) how fast is this spreading?"
 
     async def aclose(self) -> None:
         return None

@@ -100,6 +100,29 @@ WHO_MODE=agent .venv/bin/python -m chonkvid serve    # or put it in .env
 Tools, schemas and the image are all logged in every run recording, so the judge can
 audit what the agent actually did.
 
+## Three ways to run the WHO
+
+| `WHO_MODE` | What it is | Needs |
+|---|---|---|
+| `chat` (default) | one completion with a situation report pasted in | nothing |
+| `agent` | chat completions with tools, JSON schemas, the whole log and the curve image | nothing extra |
+| `managed` | the same job as a Mistral **Managed Agent** (`mistralai-agents`): the agent is declared once, gets one **session** for the whole outbreak so its reports build on each other, and returns a **typed** object through `output_type` | `uv pip install 'mistralai-agents==1.1.0'` |
+
+Every mode falls back to `chat` on error, so the dashboard survives a broken path.
+
+## Voxtral: hear the WHO, and answer it out loud
+
+- **`voxtral-mini-tts-3`** speaks each situation report. The voice is picked by the
+  epidemic's own trend, so the delivery carries information: `en_paul_confident` while it
+  is growing, `en_paul_neutral` when flat, `en_paul_happy` when it is being beaten.
+- **`voxtral-mini-transcribe-3`** turns a spoken question from the dashboard into text for
+  the WHO, which answers and speaks the answer back.
+
+Two buttons in the WHO panel: **🔊 brief** speaks the latest report, **🎙 ask** records up
+to eight seconds and posts it. Endpoints: `GET /api/briefing/{tick}` and
+`POST /api/voice/ask`. In mock mode both return a short generated tone, so the UI path is
+testable with no key and no spend.
+
 ## Results (live, 21 Nov)
 
 _Paste `results/latest.md` from the live `experiment` run here before submitting._
@@ -110,7 +133,9 @@ _Paste `results/latest.md` from the live `experiment` run here before submitting
 - **mistral-embed**: infection detection and variant lineages.
 - **Le Chonk / Mistral Large 4**: the WHO agent (situation reports, vaccine synthesis),
   using function calling, JSON-schema structured outputs, its 1M-token context window
-  and its vision encoder (see the WHO agent section above).
+  and its vision encoder, and as a Managed Agent with a session (see above).
+- **Voxtral**: the WHO reads its report aloud and takes spoken questions
+  (`voxtral-mini-tts-3`, `voxtral-mini-transcribe-3`).
 - **Mistral Vibe**: build tool.
 
 Model IDs are set in `.env`.

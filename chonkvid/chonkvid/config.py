@@ -69,6 +69,13 @@ class Settings:
     who_rounds: int = field(
         default_factory=lambda: int(os.environ.get("WHO_ROUNDS", "2") or 2)
     )
+    # Voxtral: the WHO briefs you aloud, and takes a spoken question from the dashboard.
+    tts_model: str = field(
+        default_factory=lambda: os.environ.get("VOX_TTS_MODEL", "voxtral-mini-tts-3")
+    )
+    stt_model: str = field(
+        default_factory=lambda: os.environ.get("VOX_STT_MODEL", "voxtral-mini-transcribe-3")
+    )
 
     @property
     def who_agent(self) -> bool:

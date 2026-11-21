@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import prompt_test
 from . import scenario
+from . import voice
 from .config import ROOT, settings
 from .detect import Detector
 from .experiment import RESULTS, RUNS, Recorder
@@ -73,6 +74,57 @@ def runs():
     return [{"id": f.name, "bytes": f.stat().st_size} for f in files]
 
 
+# --- Voxtral: listen to the WHO, and ask it out loud ------------------------------
+
+SITREPS: dict[int, dict] = {}          # tick -> {"structured": {...}, "counts": {...}}
+
+
+@app.get("/api/briefing/{tick}")
+async def briefing(tick: int):
+    """Speak the situation report for a tick: Voxtral TTS, voice chosen by the trend."""
+    sit = SITREPS.get(tick) or (SITREPS[max(SITREPS)] if SITREPS else None)
+    if not sit:
+        return JSONResponse({"available": False, "error": "no situation report yet"}, 404)
+    s = settings()
+    llm = make_llm(s)
+    try:
+        b = await voice.briefing(llm, sit.get("structured") or {}, sit.get("counts"))
+        return b.as_dict()
+    except Exception as exc:
+        return JSONResponse({"available": False, "error": f"{type(exc).__name__}: {exc}"}, 502)
+    finally:
+        await llm.aclose()
+
+
+@app.post("/api/voice/ask")
+async def voice_ask(payload: dict):
+    """Transcribe a spoken question (base64 webm), answer it, speak the answer back."""
+    import base64
+
+    raw = payload.get("audio_b64") or ""
+    if not raw:
+        return JSONResponse({"error": "audio_b64 is required"}, 400)
+    try:
+        audio = base64.b64decode(raw.split(",")[-1])
+    except Exception:
+        return JSONResponse({"error": "audio_b64 is not base64"}, 400)
+    latest = SITREPS[max(SITREPS)] if SITREPS else {}
+    structured = latest.get("structured") or {}
+    context = (f"tick {structured.get('tick', '?')}, counts "
+               f"{json.dumps(latest.get('counts') or {})}, R {structured.get('rt')}, "
+               f"trend {structured.get('trend')}, recommendation "
+               f"{structured.get('recommendation')}. {structured.get('rationale', '')}")
+    s = settings()
+    llm = make_llm(s)
+    try:
+        a = await voice.answer(llm, audio, context)
+        return a.as_dict()
+    except Exception as exc:
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, 502)
+    finally:
+        await llm.aclose()
+
+
 @app.get("/api/runs/{run_id}")
 def run(run_id: str):
     p = (RUNS / run_id).resolve()
@@ -125,9 +177,15 @@ async def ws_run(ws: WebSocket):
         det = Detector(llm, s.threshold)
         who = make_who(s, llm)
         rec = Recorder(f"{llm.source}-dash-{cfg.policy}-s{cfg.seed}")
+        last_counts: dict = {}
         try:
             async for ev in run_epidemic(llm, det, cfg, who_model=s.who_model,
                                          agent_model=s.agent_model, who=who):
+                if ev["type"] == "tick":
+                    last_counts = ev.get("counts") or last_counts
+                if ev["type"] == "sitrep" and ev.get("structured"):
+                    SITREPS[ev["tick"]] = {"structured": ev["structured"],
+                                           "counts": dict(last_counts), "source": ev.get("mode")}
                 rec.write(ev)
                 await ws.send_json(ev)
                 if ev["type"] == "tick" and ev.get("phase") == "resolved" and pace:

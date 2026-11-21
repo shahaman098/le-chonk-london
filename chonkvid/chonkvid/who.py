@@ -450,8 +450,16 @@ def as_data_url(png: bytes) -> str:
 
 
 def make_who(s, llm):
-    """Build the WHO agent from settings, or None for the plain chat path."""
-    if not getattr(s, "who_agent", False):
+    """Build the WHO agent from settings, or None for the plain chat path.
+
+    WHO_MODE=agent   -> chat completions with tools, schemas, full log and vision
+    WHO_MODE=managed -> the Agents SDK: one agent, one session, typed output
+    """
+    mode = getattr(s, "who_mode", "chat")
+    if mode == "managed":
+        from .who_managed import ManagedWho
+        return ManagedWho(s.who_model, max_iterations=max(2, s.who_rounds))
+    if mode != "agent":
         return None
     return WhoAgent(llm, s.who_model, max_rounds=s.who_rounds,
                     full_context=(s.who_context != "sample"),

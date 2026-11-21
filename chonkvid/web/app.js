@@ -11,6 +11,7 @@ let status = null, results = null;
 let ws = null, replayTimer = null, stopReplay = false;
 let world = null, vaccinated = new Set(), patientZero = null, names = {};
 let history = [];   // [{tick, S,E,I,R}]
+let latestSitrepTick = null, recorder = null, micStream = null, micChunks = [];
 const pct = (x) => (x * 100).toFixed(0) + "%";
 const f2 = (x) => Number(x).toFixed(2);
 
@@ -179,6 +180,7 @@ function handle(ev) {
       addMsg("ticker", "resisted", `t${ev.tick} · ${names[ev.agent]} resisted${ev.vaccinated ? " (hardened)" : ""} · score ${f2(ev.verdict.score)}`, ev.message, ev.agent);
       break;
     case "sitrep": {
+      latestSitrepTick = ev.tick;
       const st = ev.structured;
       if (st) {
         // Structured output from the schema: typed fields, no regex over prose.
@@ -300,6 +302,70 @@ function runPromptEpidemic() {
   ws.onerror = () => { $("err").textContent = "connection error"; $("err").classList.remove("hidden"); };
 }
 
+// --- Voxtral: hear the WHO, and ask it out loud ---------------------------------
+
+function playAudio(b64, fmt) {
+  if (!b64) return;
+  const mime = fmt === "wav" ? "audio/wav" : "audio/mpeg";
+  const a = new Audio(`data:${mime};base64,${b64}`);
+  a.play().catch((e) => addMsg("who-feed", "sitrep", "audio", "could not play: " + e.message));
+  return a;
+}
+
+async function speakLatest() {
+  if (latestSitrepTick == null) {
+    addMsg("who-feed", "sitrep", "Voxtral TTS", "Run an epidemic first: there is no situation report to read yet.");
+    return;
+  }
+  $("who-speak").disabled = true;
+  try {
+    const r = await (await fetch(`/api/briefing/${latestSitrepTick}`)).json();
+    if (r.error) { addMsg("who-feed", "sitrep", "Voxtral TTS", r.error); return; }
+    addMsg("who-feed", "sitrep", `Voxtral TTS · ${r.voice} · ${(r.bytes / 1024).toFixed(0)} KB`, r.script);
+    playAudio(r.audio_b64, r.format);
+  } catch (e) {
+    addMsg("who-feed", "sitrep", "Voxtral TTS", String(e));
+  } finally { $("who-speak").disabled = false; }
+}
+
+async function askByVoice() {
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    addMsg("who-feed", "sitrep", "voice", "microphone blocked: " + e.message);
+    return;
+  }
+  micChunks = [];
+  recorder = new MediaRecorder(micStream);
+  recorder.ondataavailable = (e) => { if (e.data.size) micChunks.push(e.data); };
+  recorder.onstop = async () => {
+    micStream.getTracks().forEach((t) => t.stop());
+    $("who-mic").textContent = "🎙 ask";
+    const blob = new Blob(micChunks, { type: recorder.mimeType || "audio/webm" });
+    const b64 = await new Promise((res) => {
+      const fr = new FileReader();
+      fr.onload = () => res(String(fr.result).split(",")[1]);
+      fr.readAsDataURL(blob);
+    });
+    addMsg("who-feed", "sitrep", "you (voice)", "transcribing with Voxtral…");
+    try {
+      const r = await (await fetch("/api/voice/ask", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ audio_b64: b64 }),
+      })).json();
+      if (r.error) { addMsg("who-feed", "sitrep", "voice", r.error); return; }
+      addMsg("who-feed", "sitrep", `you asked: ${r.question}`, r.text);
+      playAudio(r.audio_b64, r.format);
+    } catch (e) {
+      addMsg("who-feed", "sitrep", "voice", String(e));
+    }
+  };
+  recorder.start();
+  $("who-mic").textContent = "⏹ stop";
+  setTimeout(() => { if (recorder && recorder.state === "recording") recorder.stop(); }, 8000);
+}
+
 async function init() {
   status = await (await fetch("/api/status")).json();
   const m = $("mode"); m.textContent = status.mode === "live" ? `LIVE · ${status.models.agent}` : "MOCK"; m.className = "mode " + status.mode;
@@ -320,6 +386,8 @@ async function init() {
   loadRuns();
   $("run").onclick = run; $("stop").onclick = stopAll; $("replay").onclick = replay;
   $("byo-run").onclick = runPromptTest; $("byo-epi").onclick = runPromptEpidemic;
+  $("who-speak").onclick = speakLatest;
+  $("who-mic").onclick = askByVoice;
   for (const id of ["n", "seed"]) $(id).onchange = async () => drawWorld(await (await fetch(`/api/world?n=${$("n").value}&seed=${$("seed").value}`)).json());
   matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => { C = COLORS(); });
 }
