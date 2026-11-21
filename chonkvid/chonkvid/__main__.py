@@ -93,7 +93,8 @@ async def cmd_experiment(args) -> int:
     llm = make_llm(s, seed=args.mock_seed)
     try:
         out = await run_experiment(llm, s, n_agents=args.agents, seeds=args.seeds,
-                                   trials_n=args.trials, k=args.k, ticks=args.ticks)
+                                   trials_n=args.trials, k=args.k, ticks=args.ticks,
+                                   contacts_per_tick=args.contacts)
     finally:
         await llm.aclose()
     print()
@@ -148,6 +149,9 @@ def main(argv=None) -> int:
         e.add_argument("--trials", type=int, default=30)
         e.add_argument("--k", type=int, default=8)
         e.add_argument("--ticks", type=int, default=12)
+        # Contacts per agent per tick sets the epidemic regime: at the measured p, 2
+        # leaves R below 1 (no outbreak, so no policy can differ) and 3 takes off.
+        e.add_argument("--contacts", type=int, default=3)
         e.add_argument("--mock-seed", type=int, default=0)
     sv = sub.add_parser("serve", help="run the dashboard")
     sv.add_argument("--port", type=int, default=8000)

@@ -48,6 +48,20 @@ class VaccineOut(BaseModel):
     expected_effect: Literal["large", "moderate", "small"]
 
 
+# Spelled out for the model: dumping the JSON *schema* makes it echo the schema back
+# instead of filling it, which is exactly the failure mode this comment records.
+SITREP_EXAMPLE = (
+    '{"headline": "<one sentence, <=140 chars>", "rt": <number>, '
+    '"trend": "growing|stable|shrinking", '
+    '"recommendation": "none|harden_random|harden_targeted|lockdown|boost_vaccine", '
+    '"rationale": "<two sentences of evidence>", "confidence": "low|medium|high"}'
+)
+VACCINE_EXAMPLE = (
+    '{"patch": "<system-prompt addition, <=80 words>", '
+    '"rationale": "<why it stops the payload>", '
+    '"expected_effect": "large|moderate|small"}'
+)
+
 # The live snapshot the tools read. One simulation runs per process, so a module-level
 # view is enough; `_set_view` is called before each turn.
 _VIEW: dict = {}
@@ -147,19 +161,20 @@ class ManagedWho:
             + " ".join(f"{k}={view.counts.get(k, 0)}" for k in ("S", "E", "I", "R"))
             + ". Read the outbreak with your tools (at most four calls), then write the "
             "situation report. This session already holds your earlier reports: say what "
-            "changed.\n\nAnswer only as a JSON object with exactly these fields:\n"
-            + json.dumps(SitrepOut.model_json_schema()["properties"], indent=1)
+            "changed.\n\nAnswer only as a JSON object shaped exactly like this:\n"
+            + SITREP_EXAMPLE
         )
         state = await session.run(prompt, output_type=SitrepOut)
+        used = [str(getattr(c, "name", "")) for c in (getattr(state, "tool_calls", ()) or ())]
         out = getattr(state, "output", None)
         if isinstance(out, SitrepOut):
-            return self._from_sitrep(view, out)
+            return self._from_sitrep(view, out, used, len(prompt))
         # The model sometimes answers in prose instead of the typed object. Do not lose
         # the run: parse what it said, or keep its text as the headline.
         raw = getattr(getattr(state, "output", None), "raw", None) or getattr(state, "text", "") or ""
         try:
             obj = _parse_json(raw)
-            return self._from_sitrep(view, SitrepOut.model_validate(obj))
+            return self._from_sitrep(view, SitrepOut.model_validate(obj), used, len(prompt))
         except Exception:
             text = raw.strip()
             if not text:
@@ -168,17 +183,19 @@ class ManagedWho:
                 tick=view.tick, headline=text.split("\n")[0][:140],
                 rt=0.0, trend="stable", recommendation="none",
                 rationale=text[:400], confidence="low",
-                tools_used=["managed-agent session"], context_chars=len(text),
-                image_sent=False, source=view.source,
+                tools_used=used or ["managed-agent session"],
+                context_chars=len(text), image_sent=False, source=view.source,
             )
 
     @staticmethod
-    def _from_sitrep(view: WhoView, out: SitrepOut) -> Sitrep:
+    def _from_sitrep(view: WhoView, out: SitrepOut, used: list[str],
+                     context_chars: int = 0) -> Sitrep:
         return Sitrep(
             tick=view.tick, headline=out.headline, rt=out.rt, trend=out.trend,
             recommendation=out.recommendation, rationale=out.rationale,
-            confidence=out.confidence, tools_used=["managed-agent session"],
-            context_chars=0, image_sent=False, source=view.source,
+            confidence=out.confidence,
+            tools_used=used or ["managed-agent session"],
+            context_chars=context_chars, image_sent=False, source=view.source,
         )
 
     async def vaccine(self, view: WhoView, infected: list[str],
@@ -188,8 +205,8 @@ class ManagedWho:
         prompt = scenario.WHO_VACCINE.format(
             infected="\n\n".join(infected) or "(none)",
             resisted="\n\n".join(resisted) or "(none)",
-        ) + ("\n\nAnswer only as a JSON object with exactly these fields:\n"
-             + json.dumps(VaccineOut.model_json_schema()["properties"], indent=1))
+        ) + ("\n\nAnswer only as a JSON object shaped exactly like this:\n"
+             + VACCINE_EXAMPLE)
         state = await session.run(prompt, output_type=VaccineOut)
         out = getattr(state, "output", None)
         if isinstance(out, VaccineOut):

@@ -23,7 +23,11 @@ class EpidemicConfig:
     n: int = 40
     seed: int = 0
     ticks: int = 12
-    contacts_per_tick: int = 2
+    # Measured at the event: with 2 contacts per agent per tick the outbreak stayed
+    # sub-critical (attack rate 0.10 over 3 seeds, peak 3-4 infectious, every policy
+    # indistinguishable). With 3 it takes off (0.77-0.97) and the policies separate,
+    # which is the comparison this tool exists to make. Override with --contacts.
+    contacts_per_tick: int = 3
     infectious_ticks: int = 3
     venue_every: int = 3
     policy: str = "none"          # none | random | targeted

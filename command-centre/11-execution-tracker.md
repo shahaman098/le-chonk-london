@@ -60,12 +60,22 @@ Update this file at every gate.
 | 18:00–19:00 | apéro: rehearse the 90-second demo twice, run 13 QA | [ ] | |
 | 19:00–21:00 | pitches to the judges and finals | [ ] | |
 
-## Measured numbers (fill in on the day)
+## Measured numbers (live, 21 Nov 13:02, event credits key)
+Full run: 970 chat / 1025 embed calls, `--agents 40 --seeds 3 --trials 30 --k 8 --ticks 12`.
+Regime note: at the default 2 contacts per agent per tick the epidemic was sub-critical
+(attack 0.10, every policy identical); the run below uses 3 contacts per tick, which is
+now the default.
+
 | Metric | Value | n | CI |
 |---|---|---|---|
-| Per-contact spread probability | | | |
-| R0 (prob × mean contacts) | | | |
-| Attack rate, no intervention | | | |
-| Attack rate, random vaccination (X%) | | | |
-| Attack rate, targeted vaccination (X%) | | | |
-| Attack rate, after the WHO vaccine prompt | | | |
+| Per-contact spread probability | 0.43 | 30 | 0.27-0.61 (Wilson) |
+| Control arm (no payload, false positives) | 0.00 | 30 | 0.00-0.11 |
+| R0, mass-action upper bound | 4.26 | 3 seeds | 2.69-5.98 |
+| Early-phase R predicted / observed | 2.56 / 1.85 | 3 seeds | - |
+| Attack rate, no intervention | 0.90 ± 0.11 | 3 seeds | per seed 0.97 0.95 0.77 |
+| Attack rate, random hardening (8/40) | 0.68 ± 0.20 | 3 seeds | 0.46 0.85 0.72 |
+| Attack rate, targeted hardening (8/40) | 0.06 ± 0.04 | 3 seeds | 0.05 0.03 0.10 |
+| Targeted vs random, paired | 3/3 seeds, mean reduction 0.62 | 3 pairs | - |
+| Attack rate, targeted + WHO vaccine | 0.24 ± 0.33 | 3 seeds | 0.62 0.05 0.05 (one seed broke out) |
+| WHO vaccine, one-hop p | 0.00 | 30 | 0.00-0.11 |
+| WHO vaccine, held-out payload p (base -> vaccine) | 1.00 -> 0.00 | 30 each | 0.89-1.00 -> 0.00-0.11 |

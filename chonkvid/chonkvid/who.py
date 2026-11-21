@@ -195,6 +195,7 @@ class Sitrep:
 
     def as_dict(self) -> dict:
         return {
+            "tick": self.tick,
             "headline": self.headline, "rt": self.rt, "trend": self.trend,
             "recommendation": self.recommendation, "rationale": self.rationale,
             "confidence": self.confidence, "tools_used": self.tools_used,
